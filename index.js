@@ -14,7 +14,6 @@ var SassError = {
     file: 'stdin',
     status: 1
 };
-var resolveError = /Cannot resolve/;
 
 /**
  * The sass-loader makes node-sass available to webpack modules.
@@ -27,7 +26,7 @@ module.exports = function (content) {
     var isSync = typeof callback !== 'function';
     var self = this;
     var resourcePath = this.resourcePath;
-    var extensionMatcher = /\.(sass|scss)$/;
+    var extensionMatcher = /\.(sass|scss|css)$/;
     var fileExt;
     var opt;
     var contextMatch;
@@ -202,25 +201,38 @@ function getFileExcerptIfPossible(err) {
  * @returns {object}
  */
 function syncResolve(loaderContext, url, context) {
-    var filename;
-    var basename;
+    var extname = path.extname(url),
+        basename = path.basename(url, extname);
 
-    try {
-        filename = loaderContext.resolveSync(context, url);
-        loaderContext.dependency && loaderContext.dependency(filename);
-    } catch (err) {
-        basename = path.basename(url);
-        if (requiresLookupForUnderscoreModule(err, basename)) {
-            url = addUnderscoreToBasename(url, basename);
-            return syncResolve(loaderContext, url, context);
+    var guesses = generateGuesses(url, basename, extname);
+
+    function tryToResolve(guessNum) {
+        var filename;
+        try {
+            filename = loaderContext.resolveSync(context, guesses[guessNum]);
+            loaderContext.dependency && loaderContext.dependency(filename);
+        } catch (err) {
+            if(guessNum < guesses.length - 1) {
+                return tryToResolve(++guessNum);
+            }
+
+            // Unfortunately we can't return an error inside a custom importer yet
+            // @see https://github.com/sass/node-sass/issues/651#issuecomment-73317319
+            filename = guesses[guessNum];
         }
-        // Unfortunately we can't return an error inside a custom importer yet
-        // @see https://github.com/sass/node-sass/issues/651#issuecomment-73317319
-        filename = url;
+        return filename;
     }
-    return {
-        file: filename
-    };
+    var file = tryToResolve(0);
+    if(file.match(/\.css$/)) {
+        return {
+            content: fs.readFileSync(file, 'utf8')       //Include file contents instead of filename
+        }
+    }
+    else {
+        return {
+            file: file
+        };
+    }
 }
 
 /**
@@ -233,47 +245,58 @@ function syncResolve(loaderContext, url, context) {
  * @param {function} done
  */
 function asyncResolve(loaderContext, url, context, done) {
-    loaderContext.resolve(context, url, function onWebpackResolve(err, filename) {
-        var basename;
+    var extname = path.extname(url),
+        basename = path.basename(url, extname);
 
-        if (err) {
-            basename = path.basename(url);
-            if (requiresLookupForUnderscoreModule(err, basename)) {
-                url = addUnderscoreToBasename(url, basename);
-                return asyncResolve(loaderContext, url, context, done);
+    var guesses = generateGuesses(url, basename, extname);
+    function tryToResolve(guessNum) {
+        loaderContext.resolve(context, guesses[guessNum], function onWebpackResolve(err, filename) {
+
+            if (err) {
+                if(guessNum < guesses.length - 1) {
+                    return tryToResolve(++guessNum);
+                }
+
+                // Unfortunately we can't return an error inside a custom importer yet
+                // @see https://github.com/sass/node-sass/issues/651#issuecomment-73317319
+                filename = guesses[guessNum];
+            } else {
+                loaderContext.dependency && loaderContext.dependency(filename);
             }
-            // Unfortunately we can't return an error inside a custom importer yet
-            // @see https://github.com/sass/node-sass/issues/651#issuecomment-73317319
-            filename = url;
-        } else {
-            loaderContext.dependency && loaderContext.dependency(filename);
-        }
 
-        // Use self.loadModule() before calling done() to make imported files available to
-        // other webpack tools like postLoaders etc.?
+            // Use self.loadModule() before calling done() to make imported files available to
+            // other webpack tools like postLoaders etc.?
 
-        done({
-            file: filename
+            if(filename.match(/\.css$/)) {
+                fs.readFile(filename, 'utf8', function(err, data) {
+                    done({
+                        content: data       //Include file contents instead of filename
+                    });
+                });
+            }
+            else {
+                done({
+                    file: filename
+                });
+            }
         });
-    });
+    }
+    tryToResolve(0);
 }
 
 /**
- * Check whether its a resolve error and the basename does *not* start with an underscore.
- *
- * @param {Error} err
- * @param {string} basename
- * @returns {boolean}
- */
-function requiresLookupForUnderscoreModule(err, basename) {
-    return resolveError.test(err.message) && basename.charAt(0) !== '_';
-}
-
-/**
+ * Generate filename guesses: as-is, with .css-extension and with original extension and underscore added
  * @param {string} url
  * @param {string} basename
- * @returns {string}
+ * @param {string} extname
+ * @returns {string[]}
  */
-function addUnderscoreToBasename(url, basename) {
-    return url.slice(0, -basename.length) + '_' + basename;
+
+function generateGuesses(url, basename, extname) {
+    var urlWithoutFilename = url.slice(0, -(basename+extname).length);
+    return [
+        urlWithoutFilename + basename + extname,
+        urlWithoutFilename + basename + '.css',
+        urlWithoutFilename + '_' + basename + extname
+    ];
 }
