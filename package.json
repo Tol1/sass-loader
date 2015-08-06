@@ -31,7 +31,9 @@
   },
   "dependencies": {
     "async": "^1.4.0",
-    "loader-utils": "^0.2.5"
+    "loader-utils": "^0.2.5",
+    "postcss": "^4.1.16",
+    "postcss-url": "^4.0.1"
   },
   "devDependencies": {
     "bootstrap-sass": "^3.3.5",

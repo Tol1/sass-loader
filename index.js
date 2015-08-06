@@ -6,6 +6,8 @@ var path = require('path');
 var os = require('os');
 var fs = require('fs');
 var async = require('async');
+var postcss = require('postcss');
+var postUrl = require('postcss-url');
 
 // A typical sass error looks like this
 var SassError = {
@@ -127,11 +129,27 @@ module.exports = function (content) {
             // Add the resolvedFilename as dependency. Although we're also using stats.includedFiles, this might come
             // in handy when an error occurs. In this case, we don't get stats.includedFiles from node-sass.
             addNormalizedDependency(resolvedFilename);
-            // By removing the CSS file extension, we trigger node-sass to include the CSS file instead of just linking it.
-            resolvedFilename = resolvedFilename.replace(matchCss, '');
-            return {
-                file: resolvedFilename
-            };
+            if(resolvedFilename.match(matchCss)) {  //css import, rebase relative urls to match bundle location
+                var cssContent = fs.readFileSync(resolvedFilename);
+                var output = postcss()
+                    .use(postUrl({
+                        url: function (url) {
+                            if (url.match(/^(data|http)/)) {
+                                return url;
+                            }
+                            return path.relative(self.context, path.resolve(path.dirname(resolvedFilename), url)).replace(/\\/g, '/');
+                        }
+                    }))
+                    .process(cssContent).css;
+                return {
+                    contents: output
+                };
+            }
+            else {
+                return {
+                    file: resolvedFilename
+                };
+            }
         } catch (err) {
             return resolveSync(dirContext, originalImport, importsToResolve);
         }
@@ -165,15 +183,32 @@ module.exports = function (content) {
             // Add the resolvedFilename as dependency. Although we're also using stats.includedFiles, this might come
             // in handy when an error occurs. In this case, we don't get stats.includedFiles from node-sass.
             addNormalizedDependency(resolvedFilename);
-            // By removing the CSS file extension, we trigger node-sass to include the CSS file instead of just linking it.
-            resolvedFilename = resolvedFilename.replace(matchCss, '');
 
-            // Use self.loadModule() before calling done() to make imported files available to
-            // other webpack tools like postLoaders etc.?
+            if(resolvedFilename.match(matchCss)) {  //css import, rebase relative urls to match bundle location
+                fs.readFile(resolvedFilename, 'utf8', function(err, cssContent) {
+                    var output = postcss()
+                        .use(postUrl({
+                            url: function (url) {
+                                if (url.match(/^(data|http)/)) {
+                                    return url;
+                                }
+                                return path.relative(self.context, path.resolve(path.dirname(resolvedFilename), url)).replace(/\\/g, '/');
+                            }
+                        }))
+                        .process(cssContent).css;
+                    done({
+                        contents: output
+                    });
+                });
+            }
+            else {
+                // Use self.loadModule() before calling done() to make imported files available to
+                // other webpack tools like postLoaders etc.?
 
-            done({
-                file: resolvedFilename.replace(matchCss, '')
-            });
+                done({
+                    file: resolvedFilename.replace(matchCss, '')
+                });
+            }
         });
     }
 
@@ -330,7 +365,7 @@ function getImportsToResolve(originalImport) {
             return [originalImport];
         }
     }
-    if (ext) {
+    if (ext && ext.match(/\.(scss|sass|css)/)) {        //TODO: check if the extension is REAL extension, not part of the filename
         if (ext === '.scss' || ext === '.sass') {
             add(basename);
         }/* else {
