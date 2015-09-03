@@ -245,6 +245,8 @@ module.exports = function (content) {
     sassOptions.includePaths = sassOptions.includePaths ? [].concat(sassOptions.includePaths) : [];
     sassOptions.includePaths.push(path.dirname(resourcePath));
 
+    sassOptions.absoluteSourceMapPaths = Boolean(sassOptions.absoluteSourceMapPaths);
+
     // start the actual rendering
     if (isSync) {
         try {
@@ -272,6 +274,12 @@ module.exports = function (content) {
             // The first source is 'stdin' according to libsass because we've used the data input
             // Now let's override that value with the correct relative path
             result.map.sources[0] = path.relative(self.options.output.path, resourcePath);
+            if(sassOptions.absoluteSourceMapPaths) {
+                result.map.sources = result.map.sources.map(function (relative) {
+                    return path.resolve(self.options.output.path, relative);
+                });
+            }
+
         } else {
             result.map = null;
         }
